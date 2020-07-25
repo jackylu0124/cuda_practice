@@ -55,11 +55,14 @@ float* readImage(int* width, int* height, std::string path) {
 
 	// Close the file
 	reader.close();
+	std::cout << "Finish reading image file.\n" << std::endl;
 
 	return vec;
 }
 
 void writeImage(float* vec, int width, int height, std::string path) {
+	std::cout << "Start writing image file.\n" << std::endl;
+
 	std::ofstream writer;
 	writer.open(path);
 	if (!writer.is_open()) {
@@ -81,6 +84,7 @@ void writeImage(float* vec, int width, int height, std::string path) {
 	}
 
 	writer.close();
+	std::cout << "Finish writing image file.\n" << std::endl;
 }
 
 void colorToGrayCPU(std::string readPath, std::string writePath) {
@@ -112,10 +116,62 @@ void colorToGrayCPU(std::string readPath, std::string writePath) {
 	free(inVec);
 }
 
+__global__
+void colorToGrayKernel(float* inVec, float* outVec, int width, int height) {
+	int row = blockIdx.y * blockDim.y + threadIdx.y;
+	int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+	if (row < height && col < width) {
+		int index = (row * width + col) * 3;
+		float r = inVec[index];
+		float g = inVec[index + 1];
+		float b = inVec[index + 2];
+
+		float gray = 0.21 * r + 0.72 * g + 0.07 * b;
+		outVec[index] = gray;
+		outVec[index + 1] = gray;
+		outVec[index + 2] = gray;
+	}
+}
+
+void colorToGrayGPU(std::string readPath, std::string writePath) {
+	int width, height;
+	float* inVec = readImage(&width, &height, readPath);
+	int size = width * height * 3 * sizeof(float);
+	float* outVec = (float*) malloc(size);
+	if (outVec == NULL) {
+		std::cout << "Malloc for vector in colorToGrayGPU(std::string readPath, std::string writePath) fails." << std::endl;
+		exit(1);
+	}
+
+	float* d_inVec, *d_outVec;
+	cudaMalloc((void**) &d_inVec, size);
+	cudaMemcpy(d_inVec, inVec, size, cudaMemcpyHostToDevice);
+	cudaMalloc((void**) &d_outVec, size);
+	cudaMemcpy(d_outVec, outVec, size, cudaMemcpyHostToDevice);
+
+	// Launch kernel
+	dim3 dimGrid(ceil(width / 16.0), ceil(height / 16.0), 1);
+	dim3 dimBlock(16, 16, 1);
+	colorToGrayKernel<<<dimGrid, dimBlock>>>(d_inVec, d_outVec, width, height);
+
+	cudaMemcpy(outVec, d_outVec, size, cudaMemcpyDeviceToHost);
+	cudaFree(d_inVec);
+	cudaFree(d_outVec);
+
+	writeImage(outVec, width, height, writePath);
+
+	// Free allocated memories
+	free(outVec);
+	free(inVec);
+}
+
 int main() {
 	// TODO
 	std::string readPath = "pineapple_pizza.ppm";
-	std::string writePath = "pineapple_pizza_gray_cpu.ppm";
-	colorToGrayCPU(readPath, writePath);
+	std::string writePathGrayCPU = "pineapple_pizza_gray_cpu.ppm";
+	std::string writePathGrayGPU = "pineapple_pizza_gray_gpu.ppm";
+	colorToGrayCPU(readPath, writePathGrayCPU);
+	colorToGrayGPU(readPath, writePathGrayGPU);
 	return 0;
 }
